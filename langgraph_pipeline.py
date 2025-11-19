@@ -1,4 +1,5 @@
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -39,7 +40,7 @@ def tool_func(들어갈 인자들(타입 힌트 포함)) -> str:
     # RAG 수행
     return string 
 """
-
+# tools 에는, 각각 이미지 처리 혹은 RAG를 수행하는 세가지 함수가 들어가야 함
 tools = []
 
 ### 노드 선언 -----------------------------
@@ -53,7 +54,6 @@ def node_collect(state: GraphState, collector: ModelCollect):
             "messages": [response],  # 사용자에게 보여줄 질문
             "picture_exist": picture,                   # 사진이 있다면 사진의 저장 경로
             "collected_data": collected_data,            # 업데이트된 새로운 정보 딕셔너리
-            "user_action": "None",
         }
     else:
         return {
@@ -61,7 +61,6 @@ def node_collect(state: GraphState, collector: ModelCollect):
             "messages": [response],
             "picture_exist": "None",
             "collected_data": collected_data,
-            "user_action": "None",
         }
 
 def node_recommend(state: GraphState, recommender: ModelRecommend):
@@ -75,7 +74,6 @@ def node_recommend(state: GraphState, recommender: ModelRecommend):
         "current_stage" : "recommend",
         "messages": [response],
         "recommend_result": [recommend_result],
-        "user_action": "None",
     }
 
 def node_qna(state: GraphState, chatbot: ModelQna):
@@ -84,7 +82,6 @@ def node_qna(state: GraphState, chatbot: ModelQna):
     return {
         "current_stage": "qna",
         "messages": [response],
-        "user_action": "None",
     }
 
 def node_end_state(state:GraphState):
@@ -131,13 +128,21 @@ def is_tool_calls(state: GraphState):
         return "tool_call"
     else:
         return "done"
+    
+def tool_back_to_caller(state: GraphState) -> str:
+    current_state = state.get("current_state")
+
+    if current_state and current_state in ["collect", "recommend", "qna"]:
+        return current_state
+    
+    return "done"
 
 
 ### workflow 구현----------------------
 
-model_collect = ModelCollect()
-model_recommend = ModelRecommend()
-model_qna = ModelQna()
+model_collect = ModelCollect(tools)
+model_recommend = ModelRecommend(tools)
+model_qna = ModelQna(tools)
 
 workflow = StateGraph(GraphState)
 
@@ -148,6 +153,9 @@ workflow.add_node("exit", node_end_state)
 workflow.add_node("rag_tool", ToolNode(tools))
 
 workflow.set_entry_point("__start__")
+
+workflow.add_edge("exit", END)
+workflow.add_edge
 
 workflow.add_conditional_edges(
     "__start__",
@@ -188,8 +196,60 @@ workflow.add_conditional_edges(
     }
 )
 
+workflow.add_conditional_edges(
+    "rag_tool",
+    tool_back_to_caller,
+    {
+        "collect": "collect",
+        "recommend": "recommend",
+        "qna": "qna",
+        "exit": END,
+    }
+)
+
+### 그래프 컴파일 ----------------------
+memory = MemorySaver()
+app = workflow.compile(checkpointer=memory)
+
+### 실제 구동 코드 ---------------------
+def run_chat_loop(app, memory: MemorySaver, initial_state: dict):
+    thread_id_01 = "basic_user"
+    config = {"configurable": {"thread_id": thread_id_01}}
+
+    response = app.invoke(initial_state)
+
+    while True:
+        try:
+            current_state = memory.get_state(config).values
+            message = current_state["messages"][-1]
+
+            print("="*30)
+            print(f"채팅 시작: 현재 작업 {current_state["current_stage"]}")
+            print(f"AI   : {message}")
+            print("="*30)
+            user_input = input("User : ")
+
+            if user_input.lower() == "종료":
+                print("종료합니다...")
+                break
+
+            input_delta = {
+                "messages": [HumanMessage(content=user_input)],
+                "user_action": "None",
+            }
+
+            # 이후 확장성을 위해 app.stream 사용
+            stream_generator = app.stream(input_delta, config=config)
+
+            print("생성중", end='')
+            for step in stream_generator:
+                print('.', end=' ', flush=True)
+        except Exception as e:
+            print(f"오류 발생: {e}")
+            break
 
 ### -----------------------------------
 
-
+if __name__ == "__main__":
+    run_chat_loop(app, memory, initial_state)
 
