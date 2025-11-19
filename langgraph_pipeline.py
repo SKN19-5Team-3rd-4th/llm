@@ -1,6 +1,7 @@
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
 from typing import TypedDict, Annotated, Optional, Literal, List
 
 from functools import partial
@@ -30,6 +31,16 @@ initial_state = {
     "messages": []
 
 }
+### tools 선언 ---------------------------
+# tool 함수 선언
+""" 
+@tools
+def tool_func(들어갈 인자들(타입 힌트 포함)) -> str:
+    # RAG 수행
+    return string 
+"""
+
+tools = []
 
 ### 노드 선언 -----------------------------
 
@@ -39,7 +50,7 @@ def node_collect(state: GraphState, collector: ModelCollect):
     if picture is not None:
         return {
             "current_stage" : "collect",
-            "messages": [AIMessage(content=response)],  # 사용자에게 보여줄 질문
+            "messages": [response],  # 사용자에게 보여줄 질문
             "picture_exist": picture,                   # 사진이 있다면 사진의 저장 경로
             "collected_data": collected_data,            # 업데이트된 새로운 정보 딕셔너리
             "user_action": "None",
@@ -47,7 +58,7 @@ def node_collect(state: GraphState, collector: ModelCollect):
     else:
         return {
             "current_stage" : "collect",
-            "messages": [AIMessage(content=response)],
+            "messages": [response],
             "picture_exist": "None",
             "collected_data": collected_data,
             "user_action": "None",
@@ -57,10 +68,12 @@ def node_recommend(state: GraphState, recommender: ModelRecommend):
     response, recommend_result = recommender.get_response(state["messages"], state["collected_data"])  
     # collected_data (정보를 저장한 딕셔너리) 도 같이 전달해주는 것이 낫지 않을지...
     # 사용자에게 보여줘야할 값 : response와, 추천 결과: recommend_result를 같이 반환해줘야 할듯 (추천 결과는 다시 추천 받을때 제외하기 위함)
+    # collected_data: dict         # 사용자에게서 모은 데이터(정보)를 저장하는 딕셔너리
+    # recommend_result: List[str]  # 사용자에게 추천한 결과(해당 추천 결과는 재추천할때에 고려하지 않게 하기 위함)
 
     return {
         "current_stage" : "recommend",
-        "messages": [AIMessage(content=response)],
+        "messages": [response],
         "recommend_result": [recommend_result],
         "user_action": "None",
     }
@@ -70,7 +83,7 @@ def node_qna(state: GraphState, chatbot: ModelQna):
 
     return {
         "current_stage": "qna",
-        "messages": [AIMessage(content=response)],
+        "messages": [response],
         "user_action": "None",
     }
 
@@ -79,15 +92,6 @@ def node_end_state(state:GraphState):
         "current_stage": "exit"
     }
 
-def node_image_process(state:GraphState):
-    # 이미지 처리 구현
-    collected_data = None
-    return {
-        "collected_data": collected_data,
-        "user_action": "None",
-        "current_stage": "collect",
-        "picture_exist": None
-    }
 
 ### router 선언 -----------------------
 
@@ -98,7 +102,7 @@ def main_router(state: GraphState):
     action = state["user_action"]
 
     if state["user_action"] == "Restart":
-        return "Restart"
+        return "restart"
     
     if stage == "collect":
         if ModelCollect.is_data_enough(state["collected_data"]):
@@ -120,9 +124,11 @@ def main_router(state: GraphState):
     elif stage == "exit":
         return "exit"
     
-def is_picture_input(state: GraphState):
-    if state["picture_exist"] is not None:
-        return "image"
+def is_tool_calls(state: GraphState):
+    last_message = state["messages"][-1]
+
+    if last_message.tool_calls:
+        return "tool_call"
     else:
         return "done"
 
@@ -139,7 +145,7 @@ workflow.add_node("collect", partial(node_collect, collector=model_collect))
 workflow.add_node("recommend", partial(node_collect, collector=model_recommend))
 workflow.add_node("qna", partial(node_collect, collector=model_qna))
 workflow.add_node("exit", node_end_state)
-workflow.add_node("image", node_image_process)
+workflow.add_node("rag_tool", ToolNode(tools))
 
 workflow.set_entry_point("__start__")
 
@@ -157,13 +163,30 @@ workflow.add_conditional_edges(
 
 workflow.add_conditional_edges(
     "collect",
-    is_picture_input,
+    is_tool_calls,
     {
-        "image": "image",
+        "tool_call": "rag_tool",
         "done": END,
     }
 )
 
+workflow.add_conditional_edges(
+    "recommend",
+    is_tool_calls,
+    {
+        "tool_call": "rag_tool",
+        "done": END,
+    }
+)
+
+workflow.add_conditional_edges(
+    "qna",
+    is_tool_calls,
+    {
+        "tool_call": "rag_tool",
+        "done": END,
+    }
+)
 
 
 ### -----------------------------------
