@@ -1,4 +1,5 @@
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -9,9 +10,7 @@ from functools import partial
 import operator
 from dotenv import load_dotenv
 
-from models.collect.collect import ModelCollect
-from models.recommend.recommend import ModelRecommend
-from models.qna.qna import ModelQna
+from cache.dummydata import ModelCollect, ModelRecommend, ModelQna
 
 load_dotenv()
 
@@ -32,8 +31,24 @@ class GraphState(TypedDict):
     picture_exist: Optional[str]
 
 initial_state = {
-    "messages": []
-
+    "messages": [AIMessage(content="안녕하세요. AI입니다.")],
+    "current_stage": "recommend",
+    "user_action": "None",
+    "collected_data": {
+        "purpose": "거실 / 거실의 빈 벽이 너무 심심해서 놓고 싶어",
+        "preferred_style": "미니멀",
+        "preferred_color": "#A1B07C",
+        "plant_type": '난',
+        "season": "여름",
+        "humidity": "건조",
+        "has_dog": True,
+        "has_cat": False,
+        "isAirCond": True,
+        "watering_frequency": "주1회 가능",
+        "user_experience": "초보",
+        "emotion": "위로",
+    },
+    "recommend_result": " "
 }
 ### tools 선언 ---------------------------
 # tool 함수 선언
@@ -44,7 +59,15 @@ def tool_func(들어갈 인자들(타입 힌트 포함)) -> str:
     return string 
 """
 # tools 에는, 각각 이미지 처리 혹은 RAG를 수행하는 세가지 함수가 들어가야 함
-tools = []
+@tool
+def tool_func(query: str) -> str:
+    """
+    이 함수는 테스트를 위한 값을 그대로 반환하는 함수입니다.
+    반드시 해당 툴을 수행하세요.
+    """
+    return query
+
+tools = [tool_func]
 
 ### 노드 선언 -----------------------------
 
@@ -136,7 +159,8 @@ def is_tool_calls(state: GraphState):
         return "done"
     
 def tool_back_to_caller(state: GraphState) -> str:
-    current_state = state.get("current_state")
+    current_state = state["current_stage"]
+    print('current_state: ', current_state)
 
     if current_state and current_state in ["collect", "recommend", "qna"]:
         return current_state
@@ -153,8 +177,8 @@ model_qna = ModelQna(tools)
 workflow = StateGraph(GraphState)
 
 workflow.add_node("collect", partial(node_collect, collector=model_collect))
-workflow.add_node("recommend", partial(node_collect, recommender=model_recommend))
-workflow.add_node("qna", partial(node_collect, chatbot=model_qna))
+workflow.add_node("recommend", partial(node_recommend, recommender=model_recommend))
+workflow.add_node("qna", partial(node_qna, chatbot=model_qna))
 workflow.add_node("exit", node_end_state)
 workflow.add_node("rag_tool", ToolNode(tools))
 
@@ -224,14 +248,13 @@ def run_chat_loop(app, memory: MemorySaver, initial_state: dict):
         current_state = response
         message = current_state["messages"][-1]
 
+        print("="*30)
+        print(f"채팅 시작: 현재 작업 {current_state['current_stage']}")
+        print(f"AI   : {message.content}")
+        print("="*30)
         if current_state["current_stage"] == "exit":
             print("종료합니다...")
             break
-
-        print("="*30)
-        print(f"채팅 시작: 현재 작업 {current_state["current_stage"]}")
-        print(f"AI   : {message}")
-        print("="*30)
         user_input = input("User : ")
         action = "None"
 
@@ -244,6 +267,7 @@ def run_chat_loop(app, memory: MemorySaver, initial_state: dict):
         }
 
         response = app.invoke(input_delta, config=config)
+
 ### -----------------------------------
 
 if __name__ == "__main__":
