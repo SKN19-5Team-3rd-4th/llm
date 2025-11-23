@@ -72,7 +72,7 @@ class ModelCollect:
         input_msg = [system_msg] + messages
 
         model = ChatOpenAI(
-            model="gpt-4o-mini", 
+            model="gpt-4o", 
             temperature=0.3,
         )
 

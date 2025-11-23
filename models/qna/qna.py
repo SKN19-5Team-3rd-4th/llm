@@ -2,13 +2,7 @@ from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import ChatOpenAI
-from modules.config import * 
-from pathlib import Path
-import sys
-
-
-MODULE_DIR = Path(__file__).resolve().parent.parent / 'modules'
-sys.path.append(str(MODULE_DIR))
+from modules.config import QNA_INDEX_NAME, pc, embeddings
 
 
 class ModelQna:
@@ -37,7 +31,7 @@ class ModelQna:
         input_msg = [system_msg] + messages
 
         model = ChatOpenAI(
-            model="gpt-4o-mini", 
+            model="gpt-4o", 
             temperature=0.3,
         ).bind_tools(self.tools)
 
