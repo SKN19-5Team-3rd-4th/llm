@@ -255,6 +255,7 @@ def run_chat_loop(app, memory: MemorySaver, initial_state: dict):
             "messages": [HumanMessage(content=user_input)],
             "user_action": action,
         }
+        
         response = app.invoke(input_delta, config=config)
 ### -----------------------------------
 
