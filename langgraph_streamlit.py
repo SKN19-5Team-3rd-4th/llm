@@ -256,10 +256,8 @@ if st.session_state.is_collected is False:
         "type": ["관엽식물", "다육/선인장", "꽃이 피는 식물", "행잉 플랜트"],
         "season": ["봄", "여름", "가을", "겨울", "사계절 무관"],
         "humidity": ["건조한 편", "보통", "습한 편"],
-        "watering": ["자주 (주 2회 이상)", "보통 (주 1회)", "가끔 (월 2-3회)", "거의 안 함 (월 1회)"],
         "experience": ["식집사 입문 (초보)", "경험 있음 (중수)", "전문가 (고수)"],
         "emotion": ["행복/기쁨", "차분함/힐링", "우울/위로", "피곤/활력필요"],
-        "yes_no": ["예", "아니오"] 
     }
 
     # 1. 폼(Form) 시작: 이 블록 안의 위젯들은 즉시 반응하지 않습니다.
@@ -278,7 +276,7 @@ if st.session_state.is_collected is False:
                 "user_experience": None,
                 "emotion": None
         }
-        st.caption("모든 항목을 선택한 후 하단의 버튼을 눌러주세요.")
+        st.caption("일부 항목을 선택한 후 하단의 버튼을 눌러주세요.")
 
         # 3. 화면 레이아웃 구성
         col1, col2 = st.columns(2)
@@ -300,9 +298,7 @@ if st.session_state.is_collected is False:
             collected_data["purpose"] = get_selection("구매 목적", options["purpose"])
             collected_data["season"] = get_selection("현재 계절", options["season"])
             collected_data["humidity"] = get_selection("설치 공간 습도", options["humidity"])
-            collected_data["isAirCond"] = get_bool_selection("에어컨/히터 바람이 직접 닿나요?")
-            collected_data["has_dog"] = get_bool_selection("강아지를 키우시나요?")
-            collected_data["has_cat"] = get_bool_selection("고양이를 키우시나요?")
+            collected_data["user_experience"] = get_selection("식물 키우기 경험", options["experience"])
 
         # --- 컬럼 2 입력 ---
         with col2:
@@ -310,8 +306,6 @@ if st.session_state.is_collected is False:
             collected_data["preferred_style"] = get_selection("선호하는 스타일", options["style"])
             collected_data["preferred_color"] = get_selection("선호하는 색상", options["color"])
             collected_data["plant_type"] = get_selection("원하는 식물 종류", options["type"])
-            collected_data["watering_frequency"] = get_selection("선호하는 물주기 빈도", options["watering"])
-            collected_data["user_experience"] = get_selection("식물 키우기 경험", options["experience"])
             collected_data["emotion"] = get_selection("현재 기분/얻고 싶은 감정", options["emotion"])
 
         st.divider()
