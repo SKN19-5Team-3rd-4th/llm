@@ -9,9 +9,11 @@ from functools import partial
 import operator
 from dotenv import load_dotenv
 import warnings
-from pyfiglet import figlet_format
 import json
 import streamlit as st
+import requests
+from PIL import Image
+import io
 
 from modules.collect import ModelCollect
 from modules.recommend import ModelRecommend, tool_rag_recommend
@@ -60,29 +62,22 @@ initial_state = {
 ### tools 선언 ---------------------------
 # tool 함수 선언
 
-# tools 에는, 각각 이미지 처리 혹은 RAG를 수행하는 세가지 함수가 들어가야 함
+# tools 에는, 각각 RAG를 수행하는 두가지 함수가 들어가야 함
 tools = [tool_rag_recommend, tool_rag_qna]
 
 ### 노드 선언 -----------------------------
 
 def node_collect(state: GraphState, collector: ModelCollect):
-    response, message, collected_data = collector.get_response(state["messages"], state["collected_data"])  # 어떤 정보를 전달했는지 알아야 하니까 collected_data도 같이 전달
+    collected_data = collector.get_response(state["collected_data"])  # 어떤 정보를 전달했는지 알아야 하니까 collected_data도 같이 전달
     
     return {
-        "current_stage" : "collect",
-        "messages": [response],
+        "current_stage" : "recommend",
         "collected_data": collected_data,
     }
 
 def node_recommend(state: GraphState, recommender: ModelRecommend):
 
     response, recommend_result = recommender.get_response(state["messages"], state["collected_data"], state["recommend_result"])  
-    # collected_data (정보를 저장한 딕셔너리) 도 같이 전달해주는 것이 낫지 않을지...
-    # 사용자에게 보여줘야할 값 : response와, 추천 결과: recommend_result를 같이 반환해줘야 할듯 (추천 결과는 다시 추천 받을때 제외하기 위함)
-    # collected_data: dict         # 사용자에게서 모은 데이터(정보)를 저장하는 딕셔너리
-    # recommend_result: List[str]  # 사용자에게 추천한 결과(해당 추천 결과는 재추천할때에 고려하지 않게 하기 위함)
-
-    print(type(response))
 
     return {
         "current_stage" : "recommend",
@@ -223,138 +218,236 @@ workflow.add_conditional_edges(
     }
 )
 
-# "compile()" 은 rerun마다 재사용되도록 session_state에 저장
-if "app" not in st.session_state:
-    memory = MemorySaver()
-    st.session_state.app = workflow.compile(checkpointer=memory)
-
-
-# ==========================================
-# [4] Streamlit UI 시작
-# ==========================================
-
-st.set_page_config(page_title="PLANT AI", page_icon="🌿")
-
-st.title("🌿 PLANT AI")
-st.caption("나만의 식물 추천 파트너 (LangGraph Powered)")
-
-
-
-app = st.session_state.app
-
-if "thread_id" not in st.session_state:
-    st.session_state.thread_id = "user_1234" # 고유 ID
-
-config = {"configurable": {"thread_id": st.session_state.thread_id}}
-
-# 초기 메시지/상태가 없으면 초기화
-current_state_snapshot = app.get_state(config)
-if not current_state_snapshot.values:
-    # 초기 상태 주입
-    initial_state = {
-        "messages": [AIMessage(content="안녕하세요. AI입니다.")],
-        "current_stage": "collect",
-        "user_action": "None",
-        "collected_data": {
-            "purpose": None, "preferred_style": None, "preferred_color": None,
-            "plant_type": None, "season": None, "humidity": None,
-            "has_dog": None, "has_cat": None, "isAirCond": None,
-            "watering_frequency": None, "user_experience": None, "emotion": None
-        },
-        "recommend_result": []
-    }
-    # 초기 실행으로 상태 설정
-    app.invoke(initial_state, config=config)
-    st.rerun()
-
-# 현재 상태 가져오기
-state_values = app.get_state(config).values
-messages = state_values.get("messages", [])
-current_stage = state_values.get("current_stage", "collect")
-collected_data = state_values.get("collected_data", {})
-
-# ==========================================
-# [사이드바]
-# ==========================================
-with st.sidebar:
-    st.header("📊 진행 상황")
-    stage_map = {"collect": "정보 수집", "recommend": "추천", "qna": "상담", "exit": "종료"}
-    st.info(f"현재 단계: **{stage_map.get(current_stage, current_stage)}**")
-
-    if current_stage == 'collect' and collected_data:
-        total = len(collected_data)
-        filled = sum(1 for v in collected_data.values() if v is not None)
-        if total > 0:
-            pct = int((filled / total) * 100)
-            st.progress(pct / 100)
-            st.write(f"정보 수집률: {pct}%")
-
-    if st.button("처음부터 다시 시작"):
-        # 상태 리셋 로직 (새 thread_id 발급 등)
-        st.session_state.thread_id = f"user_{int(st.session_state.thread_id.split('_')[1]) + 1}"
-        st.rerun()
-
-# ==========================================
-# [메인] 채팅창
-# ==========================================
+### streamlit -----------------------
 
 # 메시지 파싱 함수
 def parse_ai_content(content):
-    if isinstance(content, str) and content.startswith('{'):
+    if isinstance(content, str) and content.startswith('{'):    # 메시지가 json 형태라면 딕셔너리로 변환
         try:
             data = json.loads(content)
-            if "assistant_message" in data: return data["assistant_message"]
-            if "response" in data: return data["response"]
+            if "assistant_message" in data: return data["assistant_message"], None
+            if "response" in data: return data["response"], data["flowNm"]
         except: pass
-    return content
+    return content, None
 
-# 히스토리 출력
-for msg in messages:
-    if isinstance(msg, HumanMessage):
-        with st.chat_message("user"):
-            st.write(msg.content)
-    elif isinstance(msg, AIMessage):
-        if msg.content:
-            text = parse_ai_content(msg.content)
-            with st.chat_message("assistant", avatar="🌿"):
-                st.write(text)
+if "is_collected" not in st.session_state:
+    st.session_state.is_collected = False
 
-# ==========================================
-# [입력] 처리
-# ==========================================
-if user_input := st.chat_input("메시지를 입력하세요..."):
-    # 사용자 입력 즉시 표시
-    with st.chat_message("user"):
-        st.write(user_input)
-    
-    # Action 결정 로직
-    action = "None"
-    actual_input = user_input
+if "collected_data" not in st.session_state:
+    st.session_state.collected_data = {
+                "purpose": None,            
+                "preferred_style": None,    
+                "preferred_color": None,
+                "plant_type": None,
+                "season": None,
+                "humidity": None,
+                "has_dog": None,
+                "has_cat": None,
+                "isAirCond": None,
+                "watering_frequency": None,
+                "user_experience": None,
+                "emotion": None
+            }
 
-    if user_input.lower() == "종료":
-        action = "Exit"
-    elif user_input.lower() == "qna":
-        action = "QnA"
-        actual_input = "안녕? 자기소개 해줘" # 상태 전환 트리거용
-    elif user_input.lower() == "next" or user_input == "추천해줘":
-        action = "Continue" # 혹은 로직에 따라 Skip
-        actual_input = "추천해줘"
-
-    # LangGraph 입력 페이로드
-    input_payload = {
-        "messages": [HumanMessage(content=actual_input)],
-        "user_action": action
+if st.session_state.is_collected is False:
+    options = {
+        "purpose": ["공기 정화", "인테리어", "선물", "학습/관찰", "반려용"],
+        "style": ["모던/심플", "빈티지", "내추럴/우드", "화려함"],
+        "color": ["초록색(기본)", "알록달록", "흰색 꽃", "분홍/빨강 계열"],
+        "type": ["관엽식물", "다육/선인장", "꽃이 피는 식물", "행잉 플랜트"],
+        "season": ["봄", "여름", "가을", "겨울", "사계절 무관"],
+        "humidity": ["건조한 편", "보통", "습한 편"],
+        "experience": ["식집사 입문 (초보)", "경험 있음 (중수)", "전문가 (고수)"],
+        "emotion": ["행복/기쁨", "차분함/힐링", "우울/위로", "피곤/활력필요"],
     }
 
-    with st.chat_message("assistant", avatar="🌿"):
-        with st.spinner("생각 중..."):
-            # Graph 실행
-            result = app.invoke(input_payload, config=config)
-            
-            # 마지막 응답 출력
-            last_msg = result["messages"][-1]
-            if isinstance(last_msg, AIMessage):
-                st.write(parse_ai_content(last_msg.content))
-            
-            # 상태 갱신을 위해 리런 (필수는 아니지만 UI 동기화 확실함)
-            # st.rerun()
+    with st.form(key="plant_preference_form"):
+        collected_data = {
+                "purpose": None,            
+                "preferred_style": None,    
+                "preferred_color": None,
+                "plant_type": None,
+                "season": None,
+                "humidity": None,
+                "has_dog": None,
+                "has_cat": None,
+                "isAirCond": None,
+                "watering_frequency": None,
+                "user_experience": None,
+                "emotion": None
+        }
+        st.caption("일부 항목을 선택한 후 하단의 버튼을 눌러주세요.")
+
+        col1, col2 = st.columns(2)
+
+        def get_selection(label, options_list):
+            selection = st.selectbox(label, ["선택하세요"] + options_list)
+            return selection if selection != "선택하세요" else None
+
+        def get_bool_selection(label):
+            selection = st.selectbox(label, ["선택하세요"] + options["yes_no"])
+            if selection == "예": return True
+            elif selection == "아니오": return False
+            else: return None
+
+        with col1:
+            st.subheader("환경 및 목적")
+            collected_data["purpose"] = get_selection("구매 목적", options["purpose"])
+            collected_data["season"] = get_selection("현재 계절", options["season"])
+            collected_data["humidity"] = get_selection("설치 공간 습도", options["humidity"])
+            collected_data["user_experience"] = get_selection("식물 키우기 경험", options["experience"])
+
+        with col2:
+            st.subheader("취향 및 경험")
+            collected_data["preferred_style"] = get_selection("선호하는 스타일", options["style"])
+            collected_data["preferred_color"] = get_selection("선호하는 색상", options["color"])
+            collected_data["plant_type"] = get_selection("원하는 식물 종류", options["type"])
+            collected_data["emotion"] = get_selection("현재 기분/얻고 싶은 감정", options["emotion"])
+
+        st.divider()
+
+        submitted = st.form_submit_button("식물 추천 받기")
+    if submitted:
+        st.session_state.collected_data = collected_data
+        st.session_state.is_collected = True
+else:
+    initial_state = {
+        "messages": [AIMessage(content="안녕하세요. AI입니다.")],
+        "current_stage": "recommend",
+        "user_action": "None",
+        "collected_data": st.session_state.collected_data,
+        "recommend_result": " "
+    }
+
+    # "compile()" 은 rerun마다 재사용되도록 session_state에 저장
+    if "app" not in st.session_state:
+        memory = MemorySaver()
+        st.session_state.app = workflow.compile(checkpointer=memory)
+
+    st.set_page_config(page_title="PLANT AI", page_icon="🌿")
+
+    st.title("A.P.T(AI Plant Teller)")
+
+
+    app = st.session_state.app
+
+    if "thread_id" not in st.session_state:
+        st.session_state.thread_id = "user_1234" # 고유 ID
+
+    config = {"configurable": {"thread_id": st.session_state.thread_id}}
+
+    # 초기 메시지/상태가 없으면 초기화
+    current_state_snapshot = app.get_state(config)
+    if not current_state_snapshot.values:
+        app.invoke(initial_state, config=config)
+        
+        st.rerun()
+
+    # 현재 상태 가져오기
+    state_values = app.get_state(config).values
+    messages = state_values.get("messages", [])
+    current_stage = state_values.get("current_stage", "collect")
+    collected_data = state_values.get("collected_data", {})
+
+
+    with st.sidebar:
+        st.header("진행 상황")
+        stage_map = {"collect": "정보 수집", "recommend": "추천", "qna": "상담", "exit": "종료"}
+        st.info(f"현재 단계: **{stage_map.get(current_stage, current_stage)}**")
+
+        if st.button("처음부터 다시 시작"):
+            # 상태 리셋 로직 (새 thread_id 발급 등)
+            st.session_state.thread_id = f"user_{int(st.session_state.thread_id.split('_')[1]) + 1}"
+            st.rerun()
+
+
+    # 히스토리 출력
+    for msg in messages[1:]:
+        if isinstance(msg, HumanMessage):
+            with st.chat_message("user"):
+                st.write(msg.content)
+        elif isinstance(msg, AIMessage):
+            if msg.content:
+                text, flowNm = parse_ai_content(msg.content)
+                with st.chat_message("assistant", avatar="🌿"):
+                    if flowNm is not None:
+                        with open("datas/flower_preprocessed_data.json", "r", encoding="utf-8") as f:
+                            flower_list = json.load(f)
+
+                        target = next((item for item in flower_list if item.get("flowNm") == flowNm), None)
+
+                        if target is None:
+                            st.warning(f"'{flowNm}' 데이터가 없습니다.")
+                        else:
+                            image_url = target.get("imgUrl1")
+
+                            if not image_url:
+                                st.warning(f"'{flowNm}' 데이터에 이미지 URL이 없습니다.")
+                            else:
+                                # 3. 이미지 다운로드
+                                response_img = requests.get(image_url)
+                                image_data = response_img.content
+
+                                # 4. 이미지 객체 변환
+                                pil_img = Image.open(io.BytesIO(image_data))
+
+                                # 5. Streamlit에 출력
+                                st.image(pil_img, caption=flowNm)
+                    st.write(text)
+
+
+
+    if user_input := st.chat_input("메시지를 입력하세요..."):
+        # 사용자 입력 즉시 표시
+        with st.chat_message("user"):
+            st.write(user_input)
+        
+        # Action 결정 로직
+        action = "None"
+        actual_input = user_input
+
+        if user_input.lower() == "종료":
+            action = "Exit"
+        elif user_input.lower() == "qna":
+            action = "QnA"
+            actual_input = "안녕? 자기소개 해줘" # 상태 전환 트리거용
+        elif user_input.lower() == "next" or user_input == "추천해줘":
+            action = "Continue" # 혹은 로직에 따라 Skip
+            actual_input = "추천해줘"
+
+        input_payload = {
+            "messages": [HumanMessage(content=actual_input)],
+            "user_action": action
+        }
+
+        with st.chat_message("assistant", avatar="🌿"):
+            with st.spinner("생각 중..."):
+                # Graph 실행
+                result = app.invoke(input_payload, config=config)
+                
+                # 마지막 응답 출력
+                last_msg = result["messages"][-1]
+                if isinstance(last_msg, AIMessage):
+                    response, flowNm = parse_ai_content(last_msg.content)
+                    if flowNm is not None:
+                        with open("datas/flower_preprocessed_data.json", "r", encoding="utf-8") as f:
+                            flower_list = json.load(f)
+
+                        target = next((item for item in flower_list if item.get("flowNm") == flowNm), None)
+
+                        if target is None:
+                            st.warning(f"'{flowNm}' 데이터가 없습니다.")
+                        else:
+                            image_url = target.get("imgUrl1")
+
+                            if not image_url:
+                                st.warning(f"'{flowNm}' 데이터에 이미지 URL이 없습니다.")
+                            else:
+                                response_img = requests.get(image_url)
+                                image_data = response_img.content
+
+                                pil_img = Image.open(io.BytesIO(image_data))
+
+                                st.image(pil_img, caption=flowNm)
+                    st.write(response)
+                    
