@@ -86,7 +86,7 @@ def node_recommend(state: GraphState, recommender: ModelRecommend):
 
     return {
         "current_stage" : "recommend",
-        "messages": [response],
+        "messages": response,
         "recommend_result": recommend_result,
     }
 

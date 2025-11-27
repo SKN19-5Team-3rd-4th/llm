@@ -2,18 +2,56 @@
 # 2. (rag 전) get_response(): tool 호출 
 # 3. tool recommend_rag(): 벡터DB에서 검색 후 반환
 # 4. (rag 후) get_response(): 검색된 데이터를 바탕으로 LLM이 응답 생성
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, AIMessage
 from langchain_core.tools import tool
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import ChatOpenAI
 from modules.config import REC_INDEX_NAME, pc, embeddings
 import json
+from datetime import datetime
 
 class ModelRecommend:
     def __init__(self, tools):
         self.tools = tools
 
-    def get_response(self, messages, collected_data, prev_results):        
+    def get_response(self, messages, collected_data, prev_results): 
+        if all(v is None for v in collected_data.values()):
+            day = datetime.now().day
+            month = datetime.now().month
+
+            message = "입력하신 정보가 없어 오늘의 꽃으로 추천드릴게요."
+
+            with open("datas/data.json", "r", encoding='utf-8') as f :
+                data_list = json.load(f)
+
+            select_data  = None
+            for data in data_list :
+                if data["fMonth"] == str(month) and data["fDay"] == str(day):
+                    select_data = data
+                    break
+
+            if select_data is None:
+                select_data = data_list[0]
+
+            responses = [AIMessage(content=message)]
+
+            ### ----------------- 프롬프트 작성해야함
+            prompt = ""
+
+            system_msg = SystemMessage(prompt)
+            input_msg = [system_msg] + messages
+
+            model = ChatOpenAI(
+                model='gpt-4o',
+                temperature=0.5
+            )
+
+            response = model.invoke(input_msg)
+
+            responses.append(response)
+
+            return responses, select_data["flowNm"]
+            
         prompt= f"""
             ### 요구사항 ###
             {collected_data}
@@ -64,7 +102,7 @@ class ModelRecommend:
             except:
                 continue                    
         
-        return response, recommend_result
+        return [response], recommend_result
 
 @tool
 def tool_rag_recommend(query: str) -> str:

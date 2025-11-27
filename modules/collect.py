@@ -22,7 +22,9 @@ collected_data = {
 class ModelCollect:
     question_list = {
          "purpose" : {"question" : "식물을 구매하려는 주요 목적이 무엇인가요?",
-                      "choice" : ["인테리어", "반려", "선물"]}
+                      "choice" : ["인테리어", "반려", "선물"]},
+        "preferred_style" : {},
+        "preferred_color" : {},
     }
 
     def __init__(self, tools):        
